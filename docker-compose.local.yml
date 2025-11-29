@@ -1,0 +1,39 @@
+services:
+  order-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.local
+    container_name: order-api
+    image: order-api
+    volumes:
+      - ./app:/app/app
+    ports:
+      - "8004:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg2://postgres:postgres@order-db:5432/order_db
+    command: uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+    depends_on:
+      - order-db
+
+  order-db:
+    image: postgres:17-alpine
+    container_name: order-db
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: order_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - order-db-data:/var/lib/postgresql/data
+      # - ./pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  order-db-data:
+    name: order-db-data
