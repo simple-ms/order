@@ -3,16 +3,14 @@ import requests
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from .database import get_db, init_db
+from .database import get_db, Base, engine
 from . import models
 
 PRODUCT_API_URL = os.getenv("PRODUCT_API_URL")
 
 app = FastAPI()
 
-@app.on_event("startup")
-def startup():
-    init_db()
+Base.metadata.create_all(bind=engine)
 
 class OrderCreate(BaseModel):
     product_id: int
