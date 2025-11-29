@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from .database import get_db, Base, engine
 from . import models
+from .auth import verify_token
 
 PRODUCT_API_URL = os.getenv("PRODUCT_API_URL")
 
@@ -17,7 +18,14 @@ class OrderCreate(BaseModel):
     quantity: int
 
 @app.post("/order")
-def create_order(order: OrderCreate, db: Session = Depends(get_db)):
+def create_order(
+    order: OrderCreate,
+    db: Session = Depends(get_db),
+    token_data: dict = Depends(verify_token)
+):
+    user_id = token_data.get("user_id")
+    username = token_data.get("sub")
+    
     response = requests.get(f"{PRODUCT_API_URL}/product/{order.product_id}")
 
     if response.status_code != 200:
@@ -38,4 +46,9 @@ def create_order(order: OrderCreate, db: Session = Depends(get_db)):
     db.add(new_order)
     db.commit()
     db.refresh(new_order)
-    return {"message": "Order created successfully", "id": new_order.id}
+    return {
+        "message": "Order created successfully",
+        "id": new_order.id,
+        "user_id": user_id,
+        "username": username
+    }
