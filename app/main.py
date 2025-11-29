@@ -1,4 +1,5 @@
 import os
+import uuid
 import requests
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
@@ -24,7 +25,6 @@ def create_order(
     token_data: dict = Depends(verify_token)
 ):
     user_id = token_data.get("user_id")
-    username = token_data.get("sub")
     
     response = requests.get(f"{PRODUCT_API_URL}/product/{order.product_id}")
 
@@ -40,6 +40,7 @@ def create_order(
         raise HTTPException(status_code=400, detail="Not enough stock available")
     
     new_order = models.Order(
+        user_id=uuid.UUID(user_id),
         product_id=order.product_id,
         quantity=order.quantity
     )
@@ -48,7 +49,6 @@ def create_order(
     db.refresh(new_order)
     return {
         "message": "Order created successfully",
-        "id": new_order.id,
-        "user_id": user_id,
-        "username": username
+        "order_id": new_order.id,
+        "user_id": user_id
     }
