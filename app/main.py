@@ -11,7 +11,10 @@ from .logger import logger
 
 app = FastAPI()
 
-Base.metadata.create_all(bind=engine)
+@app.on_event("startup")
+def startup():
+    Base.metadata.create_all(bind=engine)
+    logger.info("Payment service started")
 
 @app.post("/order")
 async def create_order(
