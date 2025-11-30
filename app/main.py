@@ -14,7 +14,7 @@ app = FastAPI()
 @app.on_event("startup")
 def startup():
     Base.metadata.create_all(bind=engine)
-    logger.info("Payment service started")
+    logger.info("Order service started")
 
 @app.post("/order")
 async def create_order(
