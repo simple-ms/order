@@ -1,10 +1,7 @@
-import os
 import jwt
 from fastapi import HTTPException, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
-JWT_ALGORITHM = os.getenv("JWT_ALGORITHM")
+from .config import JWT_SECRET_KEY, JWT_ALGORITHM
 
 security = HTTPBearer()
 
