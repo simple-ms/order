@@ -1,10 +1,9 @@
 import uuid
 import httpx
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Request
 from sqlalchemy.orm import Session
 from .database import get_db, Base, engine
 from . import models
-from .auth import verify_token
 from .config import PRODUCT_API_URL
 from .schemas import OrderCreate
 from .logger import logger
@@ -19,10 +18,13 @@ def startup():
 @app.post("/order")
 async def create_order(
     order: OrderCreate,
+    request: Request,
     db: Session = Depends(get_db),
-    token_data: dict = Depends(verify_token)
 ):
-    user_id = token_data.get("user_id")
+    user_id = request.headers.get("X-User-Id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User ID not found in headers")
+
     logger.info(f"Order creation request from user {user_id} for product {order.product_id}, quantity: {order.quantity}")
     
     async with httpx.AsyncClient() as client:

@@ -12,10 +12,6 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg2://postgres:postgres@order-db:5432/order_db
       PRODUCT_API_URL: "http://product:8000"
-      JWT_SECRET_KEY: "your-super-secret-jwt-key-change-in-production-min-32-chars"
-      JWT_ALGORITHM: "HS256"
-      ISSUER: "user-service"
-      AUDIENCE: "fastapi-app"
     command: uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
     depends_on:
       - order-db
