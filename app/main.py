@@ -1,6 +1,7 @@
 import uuid
 import httpx
 from fastapi import FastAPI, HTTPException, Depends, Request
+from fastapi.security import HTTPBearer
 from sqlalchemy.orm import Session
 from .database import get_db, Base, engine
 from . import models
@@ -9,6 +10,7 @@ from .schemas import OrderCreate
 from .logger import logger
 
 app = FastAPI()
+security = HTTPBearer()
 
 @app.on_event("startup")
 def startup():
@@ -20,6 +22,7 @@ async def create_order(
     order: OrderCreate,
     request: Request,
     db: Session = Depends(get_db),
+    token: HTTPBearer = Depends(security)
 ):
     user_id = request.headers.get("X-User-Id")
     if not user_id:
