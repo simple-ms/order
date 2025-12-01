@@ -9,7 +9,11 @@ from .config import PRODUCT_API_URL
 from .schemas import OrderCreate
 from .logger import logger
 
-app = FastAPI()
+app = FastAPI(
+    docs_url="/docs/order",
+    openapi_url="/openapi.json/order",
+    redoc_url="/redoc/order"
+)
 security = HTTPBearer()
 
 @app.on_event("startup")
