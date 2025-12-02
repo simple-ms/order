@@ -3,7 +3,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.security import HTTPBearer
 from sqlalchemy.orm import Session
-from .database import get_db, Base, engine
+from .database import get_db
 from . import models
 from .config import PRODUCT_API_URL
 from .schemas import OrderCreate
@@ -15,11 +15,6 @@ app = FastAPI(
     redoc_url="/redoc/order"
 )
 security = HTTPBearer()
-
-@app.on_event("startup")
-def startup():
-    Base.metadata.create_all(bind=engine)
-    logger.info("Order service started")
 
 @app.post("/order")
 async def create_order(
