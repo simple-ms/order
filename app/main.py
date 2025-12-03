@@ -1,7 +1,7 @@
 import uuid
 import httpx
 from typing import List
-from fastapi import FastAPI, HTTPException, Depends, Header, status
+from fastapi import FastAPI, HTTPException, Depends, status
 from fastapi.security import HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import SQLAlchemyError
@@ -13,6 +13,7 @@ from .config import PRODUCT_API_URL
 from .schemas import OrderCreate, OrderResponse, OrderStatusUpdate
 from .logger import logger
 from .kafka_producer import publish_order_created, publish_order_status_updated
+from .dependencies import get_current_user_id, get_current_user_role
 
 app = FastAPI(
     title="Order Service",
@@ -45,8 +46,7 @@ async def health_check():
 async def create_order(
     order: OrderCreate,
     db: AsyncSession = Depends(get_db),
-    x_user_id: str = Header(None, alias="X-User-Id"),
-    token: HTTPBearer = Depends(security)
+    user_id: str = Depends(get_current_user_id)
 ):
     """
     Create a new order.
@@ -58,15 +58,8 @@ async def create_order(
     4. Create order in database
     5. Publish order_created event to Kafka
     """
-    if not x_user_id:
-        logger.warning("Order creation failed: Missing X-User-Id header")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User ID not found in headers"
-        )
-
     logger.info(
-        f"Order creation request from user {x_user_id} for product {order.product_id}, "
+        f"Order creation request from user {user_id} for product {order.product_id}, "
         f"quantity: {order.quantity}"
     )
     
@@ -116,7 +109,7 @@ async def create_order(
     try:
         # Create order
         new_order = Order(
-            user_id=uuid.UUID(x_user_id),
+            user_id=uuid.UUID(user_id),
             product_id=order.product_id,
             quantity=order.quantity,
             total_amount=total_amount,
@@ -127,7 +120,7 @@ async def create_order(
         await db.refresh(new_order)
         
         logger.info(
-            f"Order created successfully: Order ID {new_order.id} for user {x_user_id}, "
+            f"Order created successfully: Order ID {new_order.id} for user {user_id}, "
             f"total amount: ${total_amount}"
         )
         
@@ -164,26 +157,18 @@ async def create_order(
 )
 async def get_user_orders(
     db: AsyncSession = Depends(get_db),
-    x_user_id: str = Header(None, alias="X-User-Id"),
-    token: HTTPBearer = Depends(security)
+    user_id: str = Depends(get_current_user_id)
 ):
     """
     Get all orders for the authenticated user.
     """
-    if not x_user_id:
-        logger.warning("Get orders failed: Missing X-User-Id header")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Unauthorized"
-        )
-
-    logger.info(f"Fetching orders for user {x_user_id}")
+    logger.info(f"Fetching orders for user {user_id}")
     
     try:
-        result = await db.execute(select(Order).filter(Order.user_id == x_user_id))
+        result = await db.execute(select(Order).filter(Order.user_id == user_id))
         orders = result.scalars().all()
         
-        logger.info(f"Found {len(orders)} orders for user {x_user_id}")
+        logger.info(f"Found {len(orders)} orders for user {user_id}")
         return orders
         
     except SQLAlchemyError as e:
@@ -202,28 +187,20 @@ async def get_user_orders(
 async def get_order(
     order_id: str,
     db: AsyncSession = Depends(get_db),
-    x_user_id: str = Header(None, alias="X-User-Id"),
-    token: HTTPBearer = Depends(security)
+    user_id: str = Depends(get_current_user_id)
 ):
     """
     Get a specific order by ID.
     
     Only the owner of the order can view it.
     """
-    if not x_user_id:
-        logger.warning("Get order failed: Missing X-User-Id header")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Unauthorized"
-        )
-
-    logger.info(f"Fetching order {order_id} for user {x_user_id}")
+    logger.info(f"Fetching order {order_id} for user {user_id}")
     
     try:
         result = await db.execute(
             select(Order).filter(
                 Order.id == order_id,
-                Order.user_id == x_user_id  # Ensure user owns this order
+                Order.user_id == user_id  # Ensure user owns this order
             )
         )
         order = result.scalar_one_or_none()
@@ -256,9 +233,8 @@ async def update_order_status(
     order_id: str,
     status_update: OrderStatusUpdate,
     db: AsyncSession = Depends(get_db),
-    x_user_id: str = Header(None, alias="X-User-Id"),
-    x_user_role: str = Header(None, alias="X-User-Role"),
-    token: HTTPBearer = Depends(security)
+    user_id: str = Depends(get_current_user_id),
+    user_role: str = Depends(get_current_user_role)
 ):
     """
     Update order status.
@@ -266,16 +242,9 @@ async def update_order_status(
     Only admins or sellers can update order status.
     Publishes order_status_updated event to Kafka.
     """
-    if not x_user_id:
-        logger.warning("Update order status failed: Missing X-User-Id header")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Unauthorized"
-        )
-    
     # Check authorization (only admin or seller can update)
-    if x_user_role not in ["admin", "seller"]:
-        logger.warning(f"Unauthorized status update attempt by user {x_user_id} with role {x_user_role}")
+    if user_role not in ["admin", "seller"]:
+        logger.warning(f"Unauthorized status update attempt by user {user_id} with role {user_role}")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only admins and sellers can update order status"
