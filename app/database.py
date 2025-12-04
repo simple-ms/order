@@ -1,6 +1,7 @@
 from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
-from .config import DATABASE_URL
+from .settings import settings
+
 
 
 # Modern SQLAlchemy 2.0 async style
@@ -14,12 +15,13 @@ class Base(DeclarativeBase):
 
 # Create async engine with connection pooling
 engine = create_async_engine(
-    DATABASE_URL,
+    settings.DATABASE_URL,
     pool_pre_ping=True,  # Verify connections before using them
     pool_size=5,
     max_overflow=10,
     echo=False  # Set to True for SQL query logging
 )
+
 
 AsyncSessionLocal = async_sessionmaker(
     engine,

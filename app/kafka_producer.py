@@ -3,7 +3,8 @@ import logging
 from typing import Dict, Any, Optional
 from kafka import KafkaProducer, KafkaConsumer
 from kafka.errors import KafkaError
-from .config import KAFKA_BOOTSTRAP_SERVERS
+from .settings import settings
+
 
 logger = logging.getLogger("order-service")
 
@@ -19,14 +20,14 @@ class KafkaProducerClient:
         """Initialize Kafka producer connection."""
         try:
             self.producer = KafkaProducer(
-                bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS.split(","),
+                bootstrap_servers=settings.KAFKA_BOOTSTRAP_SERVERS.split(","),
                 value_serializer=lambda v: json.dumps(v).encode('utf-8'),
                 key_serializer=lambda k: k.encode('utf-8') if k else None,
                 acks='all',  # Wait for all replicas to acknowledge
                 retries=3,
                 max_in_flight_requests_per_connection=1  # Ensure ordering
             )
-            logger.info(f"Kafka producer connected to {KAFKA_BOOTSTRAP_SERVERS}")
+            logger.info(f"Kafka producer connected to {settings.KAFKA_BOOTSTRAP_SERVERS}")
         except Exception as e:
             logger.error(f"Failed to connect Kafka producer: {str(e)}")
             self.producer = None

@@ -10,8 +10,9 @@ from sqlalchemy import select
 
 from .database import get_db
 from .models import Order, OrderStatus
-from .config import PRODUCT_API_URL
+from .settings import settings
 from .schemas import OrderCreate, OrderResponse, OrderStatusUpdate
+
 from .logger import logger
 from .kafka_producer import publish_order_created, publish_order_status_updated
 from .dependencies import get_current_user_id, get_current_user_role
@@ -28,7 +29,7 @@ app = FastAPI(
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8080", "http://127.0.0.1:8080"],
+    allow_origins=["http://localhost:8080", "http://127.0.0.1:8080", "http://localhost"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -40,9 +41,25 @@ security = HTTPBearer()
 # --- HEALTH CHECK ---
 
 @app.get("/order/health", tags=["Health"])
-async def health_check():
-    """Health check endpoint for monitoring."""
-    return {"status": "healthy", "service": "order-service"}
+async def health_check(db: AsyncSession = Depends(get_db)):
+    """Health check endpoint with database connectivity check."""
+    try:
+        await db.execute(select(1))
+        return {
+            "status": "healthy",
+            "service": "order-service",
+            "database": "connected"
+        }
+    except Exception as e:
+        logger.error(f"Health check failed: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "status": "unhealthy",
+                "service": "order-service",
+                "database": "disconnected"
+            }
+        )
 
 
 # --- ORDER ENDPOINTS ---
@@ -66,18 +83,19 @@ async def create_order(
     2. Fetch product details from Product service
     3. Verify stock availability
     4. Create order in database
-    5. Publish order_created event to Kafka
+    5. Decrement product stock
+    6. Publish order_created event to Kafka
     """
     logger.info(
         f"Order creation request from user {user_id} for product {order.product_id}, "
         f"quantity: {order.quantity}"
     )
     
-    # Fetch product details from Product service
     async with httpx.AsyncClient(timeout=10.0) as client:
+        # Step 1: Fetch product details from Product service
         try:
-            logger.info(f"Fetching product details: {PRODUCT_API_URL}/product/{order.product_id}")
-            response = await client.get(f"{PRODUCT_API_URL}/product/{order.product_id}")
+            logger.info(f"Fetching product details: {settings.PRODUCT_API_URL}/product/{order.product_id}")
+            response = await client.get(f"{settings.PRODUCT_API_URL}/product/{order.product_id}")
         except httpx.RequestError as e:
             logger.error(f"Product service unavailable: {str(e)}")
             raise HTTPException(
@@ -85,79 +103,106 @@ async def create_order(
                 detail="Product service unavailable"
             )
 
-    if response.status_code != 200:
-        logger.warning(f"Failed to fetch product {order.product_id}: Status {response.status_code}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Failed to fetch product details"
-        )
+        if response.status_code != 200:
+            logger.warning(f"Failed to fetch product {order.product_id}: Status {response.status_code}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Failed to fetch product details"
+            )
 
-    product = response.json()
-    
-    # Validate product response
-    if "stock" not in product or "price" not in product:
-        logger.error(f"Invalid product response for product {order.product_id}: missing required fields")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid product response"
-        )
+        product = response.json()
+        
+        # Step 2: Validate product response
+        if "stock" not in product or "price" not in product:
+            logger.error(f"Invalid product response for product {order.product_id}: missing required fields")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid product response"
+            )
 
-    # Check stock availability
-    if product["stock"] < order.quantity:
-        logger.warning(
-            f"Insufficient stock for product {order.product_id}: "
-            f"requested {order.quantity}, available {product['stock']}"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Not enough stock available. Available: {product['stock']}"
-        )
-    
-    # Calculate total amount
-    total_amount = product["price"] * order.quantity
-    
-    try:
-        # Create order
-        new_order = Order(
-            user_id=uuid.UUID(user_id),
-            product_id=order.product_id,
-            quantity=order.quantity,
-            total_amount=total_amount,
-            status=OrderStatus.PENDING
-        )
-        db.add(new_order)
-        await db.commit()
-        await db.refresh(new_order)
+        # Step 3: Check stock availability
+        if product["stock"] < order.quantity:
+            logger.warning(
+                f"Insufficient stock for product {order.product_id}: "
+                f"requested {order.quantity}, available {product['stock']}"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error_code": "INSUFFICIENT_STOCK",
+                    "message": f"Not enough stock available. Available: {product['stock']}",
+                    "details": {
+                        "available": product["stock"],
+                        "requested": order.quantity
+                    }
+                }
+            )
         
-        logger.info(
-            f"Order created successfully: Order ID {new_order.id} for user {user_id}, "
-            f"total amount: ${total_amount}"
-        )
+        # Calculate total amount
+        total_amount = product["price"] * order.quantity
         
-        # Publish order_created event to Kafka
-        event_published = publish_order_created({
-            "order_id": new_order.id,
-            "user_id": new_order.user_id,
-            "product_id": new_order.product_id,
-            "quantity": new_order.quantity,
-            "total_amount": new_order.total_amount,
-            "status": new_order.status.value
-        })
-        
-        if event_published:
-            logger.info(f"order_created event published for order {new_order.id}")
-        else:
-            logger.warning(f"Failed to publish order_created event for order {new_order.id}")
-        
-        return new_order
-        
-    except SQLAlchemyError as e:
-        await db.rollback()
-        logger.error(f"Database error while creating order: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Database error occurred"
-        )
+        try:
+            # Step 4: Create order in database
+            new_order = Order(
+                user_id=uuid.UUID(user_id),
+                product_id=order.product_id,
+                quantity=order.quantity,
+                total_amount=total_amount,
+                status=OrderStatus.PENDING
+            )
+            db.add(new_order)
+            await db.commit()
+            await db.refresh(new_order)
+            
+            logger.info(
+                f"Order created successfully: Order ID {new_order.id} for user {user_id}, "
+                f"total amount: ${total_amount}"
+            )
+            
+            # Step 5: Decrement product stock
+            try:
+                stock_response = await client.patch(
+                    f"{settings.PRODUCT_API_URL}/product/{order.product_id}/stock",
+                    json={"quantity": -order.quantity}
+                )
+                
+                if stock_response.status_code != 200:
+                    logger.warning(
+                        f"Failed to decrement stock for product {order.product_id}: "
+                        f"Status {stock_response.status_code}"
+                    )
+                    # Note: Order is created but stock wasn't decremented
+                    # In production, you'd want to handle this with a saga/compensation pattern
+                else:
+                    logger.info(f"Stock decremented for product {order.product_id} by {order.quantity}")
+            except httpx.RequestError as e:
+                logger.error(f"Failed to decrement stock: {str(e)}")
+                # Order is created but stock decrement failed - log for manual intervention
+            
+            # Step 6: Publish order_created event to Kafka
+            event_published = publish_order_created({
+                "order_id": new_order.id,
+                "user_id": new_order.user_id,
+                "product_id": new_order.product_id,
+                "quantity": new_order.quantity,
+                "total_amount": new_order.total_amount,
+                "status": new_order.status.value
+            })
+            
+            if event_published:
+                logger.info(f"order_created event published for order {new_order.id}")
+            else:
+                logger.warning(f"Failed to publish order_created event for order {new_order.id}")
+            
+            return new_order
+            
+        except SQLAlchemyError as e:
+            await db.rollback()
+            logger.error(f"Database error while creating order: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Database error occurred"
+            )
 
 
 @app.get(
@@ -167,15 +212,26 @@ async def create_order(
 )
 async def get_user_orders(
     db: AsyncSession = Depends(get_db),
-    user_id: str = Depends(get_current_user_id)
+    user_id: str = Depends(get_current_user_id),
+    skip: int = 0,
+    limit: int = 100
 ):
     """
-    Get all orders for the authenticated user.
+    Get all orders for the authenticated user with pagination.
     """
-    logger.info(f"Fetching orders for user {user_id}")
+    # Cap the limit to prevent abuse
+    limit = min(limit, 100)
+    
+    logger.info(f"Fetching orders for user {user_id}: skip={skip}, limit={limit}")
     
     try:
-        result = await db.execute(select(Order).filter(Order.user_id == user_id))
+        result = await db.execute(
+            select(Order)
+            .filter(Order.user_id == user_id)
+            .order_by(Order.created_at.desc())
+            .offset(skip)
+            .limit(limit)
+        )
         orders = result.scalars().all()
         
         logger.info(f"Found {len(orders)} orders for user {user_id}")
@@ -300,6 +356,78 @@ async def update_order_status(
     except SQLAlchemyError as e:
         await db.rollback()
         logger.error(f"Database error while updating order status: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Database error occurred"
+        )
+
+
+@app.delete(
+    "/orders/{order_id}",
+    status_code=status.HTTP_200_OK,
+    tags=["Orders"]
+)
+async def cancel_order(
+    order_id: str,
+    db: AsyncSession = Depends(get_db),
+    user_id: str = Depends(get_current_user_id)
+):
+    """
+    Cancel an order (soft delete by changing status).
+    
+    Only pending orders can be cancelled. Stock is restored.
+    """
+    logger.info(f"Cancelling order {order_id} for user {user_id}")
+    
+    try:
+        result = await db.execute(
+            select(Order).filter(
+                Order.id == order_id,
+                Order.user_id == user_id
+            )
+        )
+        order = result.scalar_one_or_none()
+        
+        if not order:
+            logger.warning(f"Order not found or unauthorized: {order_id}")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Order not found"
+            )
+        
+        if order.status not in [OrderStatus.PENDING, OrderStatus.PAYMENT_PENDING]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Cannot cancel order with status: {order.status.value}"
+            )
+        
+        # Restore stock
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            try:
+                stock_response = await client.patch(
+                    f"{settings.PRODUCT_API_URL}/product/{order.product_id}/stock",
+                    json={"quantity": order.quantity}  # Positive to restore
+                )
+                
+                if stock_response.status_code == 200:
+                    logger.info(f"Stock restored for product {order.product_id}")
+                else:
+                    logger.warning(f"Failed to restore stock for product {order.product_id}")
+            except httpx.RequestError as e:
+                logger.error(f"Failed to restore stock: {str(e)}")
+        
+        # Update order status
+        order.status = OrderStatus.CANCELLED
+        await db.commit()
+        
+        logger.info(f"Order {order_id} cancelled successfully")
+        return {"message": "Order cancelled successfully"}
+        
+    except HTTPException:
+        raise
+    except SQLAlchemyError as e:
+        await db.rollback()
+        logger.error(f"Database error while cancelling order: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Database error occurred"

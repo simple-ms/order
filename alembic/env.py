@@ -13,10 +13,10 @@ from alembic import context
 sys.path.append(os.getcwd())
 
 # --------------------------------------------------------
-# 2. Import Base and DATABASE_URL from your app
+# 2. Import Base and settings from your app
 # --------------------------------------------------------
 from app.database import Base          # Your declarative Base
-from app.config import DATABASE_URL    # Loaded from env/Docker
+from app.settings import settings      # Loaded from env/Docker
 from app import models                 # Ensure models are imported
 
 # ----------------------------------------------------------------
@@ -27,7 +27,7 @@ config = context.config
 # --------------------------------------------------------
 # 3. Overwrite SQLAlchemy URL using your Python config
 # --------------------------------------------------------
-config.set_main_option("sqlalchemy.url", DATABASE_URL)
+config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 
 # --------------------------------------------------------
 # 4. Logging config
