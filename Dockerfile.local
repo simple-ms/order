@@ -25,7 +25,10 @@ COPY poetry.lock pyproject.toml ./
 RUN --mount=type=cache,target=/root/.cache/pypoetry \
     poetry install --no-root
 
-COPY . .
+COPY alembic ./alembic
+COPY alembic.ini ./alembic.ini
+COPY app ./app
+COPY entrypoint.sh ./entrypoint.sh
 
 FROM python:3.13-slim-bookworm AS runtime
 
@@ -42,8 +45,11 @@ WORKDIR /app
 
 COPY --from=build --chown=appuser:appgroup $VENV_PATH $VENV_PATH
 COPY --from=build --chown=appuser:appgroup /opt/pysetup/app ./app
+COPY --from=build --chown=appuser:appgroup /opt/pysetup/alembic ./alembic
+COPY --from=build --chown=appuser:appgroup /opt/pysetup/alembic.ini ./alembic.ini
+COPY --from=build --chown=appuser:appgroup /opt/pysetup/entrypoint.sh ./entrypoint.sh
 
 USER appuser
 
-# ENTRYPOINT ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+ENTRYPOINT ["./entrypoint.sh"]
 CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

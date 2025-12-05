@@ -15,7 +15,7 @@ class Base(DeclarativeBase):
 
 # Create async engine with connection pooling
 engine = create_async_engine(
-    settings.DATABASE_URL,
+    settings.database_url,
     pool_pre_ping=True,  # Verify connections before using them
     pool_size=5,
     max_overflow=10,
