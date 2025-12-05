@@ -2,7 +2,6 @@ import uuid
 import httpx
 from typing import List
 from fastapi import FastAPI, HTTPException, Depends, status
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import SQLAlchemyError
@@ -10,7 +9,7 @@ from sqlalchemy import select
 
 from .database import get_db
 from .models import Order, OrderStatus
-from .settings import settings, cors_settings
+from .settings import settings
 from .schemas import OrderCreate, OrderResponse, OrderStatusUpdate
 
 from .logger import logger
@@ -26,14 +25,7 @@ app = FastAPI(
     redoc_url="/redoc/order"
 )
 
-# Add CORS middleware with configurable settings
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=cors_settings.origins_list,
-    allow_credentials=cors_settings.CORS_ALLOW_CREDENTIALS,
-    allow_methods=[cors_settings.CORS_ALLOW_METHODS],
-    allow_headers=[cors_settings.CORS_ALLOW_HEADERS],
-)
+# NOTE: CORS is handled by nginx gateway - no CORS middleware here
 
 security = HTTPBearer()
 
