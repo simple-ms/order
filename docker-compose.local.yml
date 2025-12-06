@@ -9,15 +9,20 @@ services:
       - ./app:/app/app
     ports:
       - "8004:8000"
-    environment:
-      DATABASE_URL: postgresql+psycopg2://postgres:postgres@order-db:5432/order_db
-      PRODUCT_API_URL: "http://product:8000"
     command: uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
     depends_on:
       - order-db
+    env_file:
+      - .env
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -f http://localhost:8000/order/health || exit 1" ]
+      interval: 1m30s
+      timeout: 30s
+      retries: 5
+      start_period: 30s
 
   order-db:
-    image: postgres:17-alpine
+    image: postgres:17
     container_name: order-db
     restart: always
     environment:
