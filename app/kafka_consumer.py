@@ -1,208 +1,202 @@
+"""
+Kafka consumer for Order Service.
+Listens for payment events and stock reservation responses.
+"""
 import json
 import logging
-import asyncio
-from typing import Callable, Dict, Any, Optional
 from kafka import KafkaConsumer
-from kafka.errors import KafkaError
 from sqlalchemy import select
-from .settings import settings
+from sqlalchemy.orm import Session
+from sqlalchemy import create_engine
 
-from .database import AsyncSessionLocal
+from .settings import settings
 from .models import Order, OrderStatus
+from .kafka_producer import publish_order_created
+
 
 logger = logging.getLogger("order-service")
 
 
-class KafkaConsumerClient:
-    """Kafka consumer client for consuming payment events."""
-    
-    def __init__(self, topic: str, group_id: str):
-        self.topic = topic
-        self.group_id = group_id
-        self.consumer: Optional[KafkaConsumer] = None
-        self._running = False
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._connect()
-    
-    def _connect(self):
-        """Initialize Kafka consumer connection."""
-        try:
-            self.consumer = KafkaConsumer(
-                self.topic,
-                bootstrap_servers=settings.KAFKA_BOOTSTRAP_SERVERS.split(","),
-                group_id=self.group_id,
+# Synchronous database URL (for consumer)
+SYNC_DATABASE_URL = settings.database_url.replace("postgresql+asyncpg://", "postgresql://")
 
-                value_deserializer=lambda m: json.loads(m.decode('utf-8')),
-                auto_offset_reset='earliest',
-                enable_auto_commit=True,
-                auto_commit_interval_ms=1000
-            )
-            logger.info(f"Kafka consumer connected to topic '{self.topic}' with group '{self.group_id}'")
-        except Exception as e:
-            logger.error(f"Failed to connect Kafka consumer: {str(e)}")
-            self.consumer = None
+
+def get_sync_db_session():
+    """Get synchronous database session for Kafka consumer."""
+    engine = create_engine(SYNC_DATABASE_URL)
+    return Session(engine)
+
+
+def handle_payment_completed(event_data: dict):
+    """Handle payment_completed event from Payment Service."""
+    order_id = event_data.get("order_id")
     
-    async def consume_async(self, handler: Callable[[Dict[str, Any]], Any]):
-        """
-        Async consumption of messages using the existing event loop.
-        
-        This is the preferred method for async applications as it doesn't
-        create new event loops for each message.
-        
-        Args:
-            handler: Async function to process each message
-        """
-        if not self.consumer:
-            logger.error("Kafka consumer not initialized")
-            return
-        
-        self._running = True
-        logger.info(f"Starting async consumption from topic '{self.topic}'")
-        
-        try:
-            while self._running:
-                # Poll for messages with a timeout
-                message_batch = self.consumer.poll(timeout_ms=1000)
-                
-                for topic_partition, messages in message_batch.items():
-                    for message in messages:
-                        try:
-                            logger.info(
-                                f"Received message from partition {message.partition}, "
-                                f"offset {message.offset}"
-                            )
-                            # Use await directly since we're in an async context
-                            await handler(message.value)
-                        except Exception as e:
-                            logger.error(f"Error processing message: {str(e)}")
-                
-                # Yield control to allow other tasks to run
-                await asyncio.sleep(0)
-                
-        except asyncio.CancelledError:
-            logger.info("Consumer task cancelled")
-        except Exception as e:
-            logger.error(f"Consumer error: {str(e)}")
-        finally:
-            self.close()
+    logger.info(f"Processing payment_completed for order: {order_id}")
     
-    def consume(self, handler: Callable[[Dict[str, Any]], None]):
-        """
-        Synchronous consumption wrapper that properly handles async handlers.
+    db = get_sync_db_session()
+    try:
+        order = db.execute(
+            select(Order).filter(Order.id == order_id)
+        ).scalar_one_or_none()
         
-        Creates a single event loop and runs the async consumer in it.
-        This should be called from a synchronous context (like run_consumer.py).
-        
-        Args:
-            handler: Async function to process each message
-        """
-        if not self.consumer:
-            logger.error("Kafka consumer not initialized")
-            return
-        
-        self._running = True
-        logger.info(f"Starting to consume messages from topic '{self.topic}'")
-        
-        # Create a new event loop for this thread
-        self._loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self._loop)
-        
-        try:
-            self._loop.run_until_complete(self._consume_loop(handler))
-        except KeyboardInterrupt:
-            logger.info("Consumer interrupted by user")
-        except Exception as e:
-            logger.error(f"Consumer error: {str(e)}")
-        finally:
-            self._running = False
-            self.close()
-            self._loop.close()
-    
-    async def _consume_loop(self, handler: Callable[[Dict[str, Any]], Any]):
-        """Internal async consumption loop."""
-        while self._running:
-            # Poll for messages
-            message_batch = self.consumer.poll(timeout_ms=1000)
+        if order:
+            order.status = OrderStatus.PAID
+            db.commit()
+            logger.info(f"Order {order_id} status updated to PAID")
+        else:
+            logger.warning(f"Order not found: {order_id}")
             
-            for topic_partition, messages in message_batch.items():
-                for message in messages:
-                    try:
-                        logger.info(
-                            f"Received message from partition {message.partition}, "
-                            f"offset {message.offset}"
-                        )
-                        # Await the async handler
-                        await handler(message.value)
-                    except Exception as e:
-                        logger.error(f"Error processing message: {str(e)}")
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error updating order status: {str(e)}")
+    finally:
+        db.close()
+
+
+def handle_payment_failed(event_data: dict):
+    """Handle payment_failed event from Payment Service."""
+    order_id = event_data.get("order_id")
+    reason = event_data.get("reason", "Unknown")
+    
+    logger.info(f"Processing payment_failed for order: {order_id}, reason: {reason}")
+    
+    db = get_sync_db_session()
+    try:
+        order = db.execute(
+            select(Order).filter(Order.id == order_id)
+        ).scalar_one_or_none()
+        
+        if order:
+            order.status = OrderStatus.FAILED
+            db.commit()
+            logger.info(f"Order {order_id} status updated to FAILED")
+        else:
+            logger.warning(f"Order not found: {order_id}")
             
-            # Brief yield for responsiveness
-            await asyncio.sleep(0.01)
-    
-    def stop(self):
-        """Signal the consumer to stop."""
-        self._running = False
-        logger.info("Consumer stop requested")
-    
-    def close(self):
-        """Close Kafka consumer connection."""
-        if self.consumer:
-            try:
-                self.consumer.close()
-                logger.info("Kafka consumer closed")
-            except Exception as e:
-                logger.error(f"Error closing consumer: {str(e)}")
-            finally:
-                self.consumer = None
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error updating order status: {str(e)}")
+    finally:
+        db.close()
 
 
-async def handle_payment_event(event: Dict[str, Any]):
+def handle_stock_reserved(event_data: dict):
     """
-    Handle payment events and update order status accordingly.
-    
-    Args:
-        event: Payment event data
+    Handle stock_reserved event from Product Service.
+    This confirms that stock has been successfully reserved.
     """
-    event_type = event.get("event_type")
-    order_id = event.get("order_id")
+    correlation_id = event_data.get("correlation_id")
+    order_id = event_data.get("order_id")
+    total_amount = event_data.get("total_amount")
     
-    if not order_id:
-        logger.warning(f"Received payment event without order_id: {event}")
-        return
+    logger.info(f"Processing stock_reserved for order: {order_id}, correlation_id: {correlation_id}")
     
-    logger.info(f"Processing payment event: {event_type} for order {order_id}")
+    db = get_sync_db_session()
+    try:
+        order = db.execute(
+            select(Order).filter(Order.id == order_id)
+        ).scalar_one_or_none()
+        
+        if order:
+            # Update order with total amount and confirm status
+            order.total_amount = total_amount
+            order.status = OrderStatus.PENDING  # Ready for payment
+            db.commit()
+            
+            logger.info(f"Order {order_id} confirmed with total_amount: {total_amount}")
+            
+            # Publish order_created event
+            publish_order_created({
+                "order_id": order.id,
+                "user_id": order.user_id,
+                "product_id": order.product_id,
+                "quantity": order.quantity,
+                "total_amount": order.total_amount,
+                "status": order.status.value
+            })
+        else:
+            logger.warning(f"Order not found: {order_id}")
+            
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error confirming order: {str(e)}")
+    finally:
+        db.close()
+
+
+def handle_stock_reservation_failed(event_data: dict):
+    """
+    Handle stock_reservation_failed event from Product Service.
+    This indicates that stock reservation failed.
+    """
+    correlation_id = event_data.get("correlation_id")
+    order_id = event_data.get("order_id")
+    reason = event_data.get("reason", "Unknown")
     
-    async with AsyncSessionLocal() as db:
-        try:
-            result = await db.execute(select(Order).filter(Order.id == order_id))
-            order = result.scalar_one_or_none()
+    logger.info(
+        f"Processing stock_reservation_failed for order: {order_id}, "
+        f"correlation_id: {correlation_id}, reason: {reason}"
+    )
+    
+    db = get_sync_db_session()
+    try:
+        order = db.execute(
+            select(Order).filter(Order.id == order_id)
+        ).scalar_one_or_none()
+        
+        if order:
+            order.status = OrderStatus.FAILED
+            db.commit()
+            logger.info(f"Order {order_id} marked as FAILED due to stock reservation failure")
+        else:
+            logger.warning(f"Order not found: {order_id}")
             
-            if not order:
-                logger.warning(f"Order not found: {order_id}")
-                return
-            
-            if event_type == "payment_completed":
-                order.status = OrderStatus.PAID
-                logger.info(f"Order {order_id} marked as PAID")
-            elif event_type == "payment_failed":
-                order.status = OrderStatus.FAILED
-                logger.info(f"Order {order_id} marked as FAILED")
-            else:
-                logger.warning(f"Unknown payment event type: {event_type}")
-                return
-            
-            await db.commit()
-            logger.info(f"Order {order_id} status updated to {order.status}")
-            
-        except Exception as e:
-            await db.rollback()
-            logger.error(f"Error updating order status: {str(e)}")
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error updating order status: {str(e)}")
+    finally:
+        db.close()
 
 
 def start_payment_event_consumer():
-    """Start consuming payment events."""
-    consumer = KafkaConsumerClient(
-        topic="payment-events",
-        group_id="order-service-group"
+    """Start the Kafka consumer for payment and stock events."""
+    logger.info("Starting Order Service Kafka Consumer...")
+    
+    consumer = KafkaConsumer(
+        "payment-events",
+        "stock-events",
+        bootstrap_servers=settings.KAFKA_BOOTSTRAP_SERVERS.split(","),
+        group_id=settings.KAFKA_CONSUMER_GROUP_ID,
+        value_deserializer=lambda m: json.loads(m.decode('utf-8')),
+        auto_offset_reset='earliest',
+        enable_auto_commit=True
     )
-    consumer.consume(handle_payment_event)
+    
+    logger.info("Listening for payment events and stock events...")
+    
+    for message in consumer:
+        try:
+            event_data = message.value
+            event_type = event_data.get("event_type")
+            
+            logger.info(f"Received event from topic '{message.topic}': {event_type}")
+            
+            # Payment events
+            if event_type == "payment_completed":
+                handle_payment_completed(event_data)
+            elif event_type == "payment_failed":
+                handle_payment_failed(event_data)
+            # Stock events
+            elif event_type == "stock_reserved":
+                handle_stock_reserved(event_data)
+            elif event_type == "stock_reservation_failed":
+                handle_stock_reservation_failed(event_data)
+            else:
+                logger.warning(f"Unknown event type: {event_type}")
+                
+        except Exception as e:
+            logger.error(f"Error processing message: {str(e)}")
+
+
+if __name__ == "__main__":
+    start_payment_event_consumer()
