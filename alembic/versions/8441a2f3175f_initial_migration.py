@@ -1,8 +1,8 @@
 """Initial migration
 
-Revision ID: d041e7ec1762
+Revision ID: 8441a2f3175f
 Revises: 
-Create Date: 2025-12-04 11:36:40.726619
+Create Date: 2025-12-06 10:21:22.797953
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = 'd041e7ec1762'
+revision: str = '8441a2f3175f'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -28,6 +28,10 @@ def upgrade() -> None:
     sa.Column('quantity', sa.Integer(), nullable=False),
     sa.Column('total_amount', sa.Float(), nullable=False),
     sa.Column('status', sa.Enum('PENDING', 'PAYMENT_PENDING', 'PAID', 'PROCESSING', 'SHIPPED', 'DELIVERED', 'CANCELLED', 'FAILED', name='orderstatus'), nullable=False),
+    sa.Column('shipping_address', sa.String(length=500), nullable=True),
+    sa.Column('city', sa.String(length=100), nullable=True),
+    sa.Column('postal_code', sa.String(length=20), nullable=True),
+    sa.Column('country', sa.String(length=100), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True),
     sa.PrimaryKeyConstraint('id')
