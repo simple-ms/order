@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     DB_USER: str = "postgres"
     DB_PASSWORD: str = "postgres"
     
+    # Redis connection parameters
+    REDIS_HOST: str = "redis"
+    REDIS_PORT: int = 6379
+    
     # Backward compatibility: if DATABASE_URL is provided, it takes precedence
     # DATABASE_URL: str | None = None
     

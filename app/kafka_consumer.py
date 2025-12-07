@@ -193,21 +193,21 @@ def start_payment_event_consumer():
                 handle_stock_reservation_failed(event_data)
             # Product events
             elif event_type == "product_created":
-                from ..kafka_handlers.product_events import handle_product_created
+                from app.kafka_handlers.product_events import handle_product_created
                 db = get_sync_db_session()
                 try:
                     handle_product_created(event_data, db)
                 finally:
                     db.close()
             elif event_type == "product_updated":
-                from ..kafka_handlers.product_events import handle_product_updated
+                from app.kafka_handlers.product_events import handle_product_updated
                 db = get_sync_db_session()
                 try:
                     handle_product_updated(event_data, db)
                 finally:
                     db.close()
             elif event_type == "product_deleted":
-                from ..kafka_handlers.product_events import handle_product_deleted
+                from app.kafka_handlers.product_events import handle_product_deleted
                 db = get_sync_db_session()
                 try:
                     handle_product_deleted(event_data, db)
