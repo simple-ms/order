@@ -1,17 +1,18 @@
 """
 Seller Order Service - Get orders for seller's products
 
-This requires cross-service communication to get seller's product IDs
+Uses ProductSellerCache (populated via Kafka events) instead of HTTP calls
+to Product service for better performance and decoupling.
 """
-import httpx
 from uuid import UUID
 from typing import List
 from fastapi import HTTPException, status
+from sqlalchemy import select
 
 from ..models.order import Order
+from ..models.product_seller_cache import ProductSellerCache
 from ..repository import OrderRepository
 from ..logger import logger
-from ..settings import settings
 
 
 async def get_seller_orders(
@@ -23,36 +24,30 @@ async def get_seller_orders(
     """
     Get all orders for products owned by a seller.
     
-    This requires:
-    1. Fetch seller's product IDs from Product service
-    2. Query orders for those product IDs
+    Uses ProductSellerCache (populated via Kafka product events) to determine
+    which products belong to the seller, then queries orders for those products.
+    
+    This eliminates the need for HTTP calls to the Product service.
     """
     logger.info(f"Fetching orders for seller {seller_id}")
     
     try:
-        # Call Product service to get seller's product IDs
-        product_api_url = getattr(settings, 'PRODUCT_API_URL', 'http://product-api:8000')
+        # Query ProductSellerCache to get seller's product IDs
+        result = await order_repository.db.execute(
+            select(ProductSellerCache.product_id)
+            .filter(ProductSellerCache.seller_id == seller_id)
+        )
         
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{product_api_url}/products/seller/{seller_id}",
-                timeout=5.0
-            )
-            
-            if response.status_code != 200:
-                logger.error(f"Failed to fetch seller products: {response.status_code}")
-                return []
-            
-            products = response.json()
-            product_ids = [p['id'] for p in products]
-            
-            if not product_ids:
-                logger.info(f"No products found for seller {seller_id}")
-                return []
+        product_ids = [row[0] for row in result.fetchall()]
+        
+        if not product_ids:
+            logger.info(f"No products found for seller {seller_id} in cache")
+            return []
+        
+        logger.info(f"Found {len(product_ids)} products for seller {seller_id}")
         
         # Query orders for these product IDs
-        from sqlalchemy import select
-        result = await order_repository.db.execute(
+        orders_result = await order_repository.db.execute(
             select(Order)
             .filter(Order.product_id.in_(product_ids))
             .order_by(Order.created_at.desc())
@@ -60,16 +55,10 @@ async def get_seller_orders(
             .limit(limit)
         )
         
-        orders = list(result.scalars().all())
+        orders = list(orders_result.scalars().all())
         logger.info(f"Found {len(orders)} orders for seller {seller_id}")
         return orders
         
-    except httpx.TimeoutException:
-        logger.error("Timeout calling Product service")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Product service unavailable"
-        )
     except Exception as e:
         logger.error(f"Error fetching seller orders: {str(e)}")
         raise HTTPException(

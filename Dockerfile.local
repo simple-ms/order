@@ -25,7 +25,7 @@ COPY poetry.lock pyproject.toml ./
 RUN --mount=type=cache,target=/root/.cache/pypoetry \
     poetry install --no-root
 
-COPY alembic ./alembic
+# COPY alembic ./alembic
 COPY alembic.ini ./alembic.ini
 COPY app ./app
 COPY entrypoint.sh ./entrypoint.sh
@@ -45,7 +45,7 @@ WORKDIR /app
 
 COPY --from=build --chown=appuser:appgroup $VENV_PATH $VENV_PATH
 COPY --from=build --chown=appuser:appgroup /opt/pysetup/app ./app
-COPY --from=build --chown=appuser:appgroup /opt/pysetup/alembic ./alembic
+# COPY --from=build --chown=appuser:appgroup /opt/pysetup/alembic ./alembic
 COPY --from=build --chown=appuser:appgroup /opt/pysetup/alembic.ini ./alembic.ini
 COPY --from=build --chown=appuser:appgroup /opt/pysetup/entrypoint.sh ./entrypoint.sh
 

@@ -9,13 +9,14 @@ import enum
 
 class OrderStatus(str, enum.Enum):
     """Order status enumeration."""
-    PENDING = "pending"
+    AWAITING_APPROVAL = "AWAITING_APPROVAL"  # Waiting for seller approval
+    PENDING = "PENDING"
     PAYMENT_PENDING = "payment_pending"
     PAID = "paid"
-    PROCESSING = "processing"
-    SHIPPED = "shipped"
-    DELIVERED = "delivered"
-    CANCELLED = "cancelled"
+    PROCESSING = "PROCESSING"
+    SHIPPED = "SHIPPED"
+    DELIVERED = "DELIVERED"
+    CANCELLED = "CANCELLED"
     FAILED = "failed"
 
 

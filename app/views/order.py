@@ -118,7 +118,65 @@ async def update_order_status(
     Only admins and sellers can update order status.
     Publishes order_status_updated event to Kafka.
     """
-    return await order_service.update_order_status(order_id, status_update, user_id, user_role)
+    return await order_service.update_order_status(order_id, status_update.status, user_id)
+
+
+@router.post(
+    "/orders/{order_id}/approve",
+    response_model=OrderResponse
+)
+async def approve_order(
+    order_id: UUID,
+    user_id: UUID = Depends(get_current_user_id),
+    user_role: str = Depends(get_current_user_role),
+    order_service: OrderService = Depends(get_order_service)
+):
+    """
+    Approve an order (seller only).
+    
+    This triggers stock reservation and moves the order to PENDING status.
+    Only the seller who owns the product can approve the order.
+    """
+    from ..services.seller_approval import approve_order as approve_order_service
+    from ..dependencies import get_order_repository
+    
+    if user_role != "seller":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only sellers can approve orders"
+        )
+    
+    order_repository = await anext(get_order_repository())
+    return await approve_order_service(order_id, user_id, order_repository)
+
+
+@router.post(
+    "/orders/{order_id}/reject",
+    response_model=OrderResponse
+)
+async def reject_order(
+    order_id: UUID,
+    user_id: UUID = Depends(get_current_user_id),
+    user_role: str = Depends(get_current_user_role),
+    order_service: OrderService = Depends(get_order_service)
+):
+    """
+    Reject an order (seller only).
+    
+    Moves the order to CANCELLED status without reserving stock.
+    Only the seller who owns the product can reject the order.
+    """
+    from ..services.seller_approval import reject_order as reject_order_service
+    from ..dependencies import get_order_repository
+    
+    if user_role != "seller":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only sellers can reject orders"
+        )
+    
+    order_repository = await anext(get_order_repository())
+    return await reject_order_service(order_id, user_id, order_repository)
 
 
 @router.delete(

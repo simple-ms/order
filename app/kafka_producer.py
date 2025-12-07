@@ -3,14 +3,11 @@ Kafka producer for Order Service.
 Publishes order events and stock reservation requests.
 """
 import json
-import logging
 from typing import Dict, Any, Optional
 from kafka import KafkaProducer
 from kafka.errors import KafkaError
 from .settings import settings
-
-
-logger = logging.getLogger("order-service")
+from .logger import logger
 
 
 class KafkaProducerClient:

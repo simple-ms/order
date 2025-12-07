@@ -3,7 +3,6 @@ Kafka consumer for Order Service.
 Listens for payment events and stock reservation responses.
 """
 import json
-import logging
 from kafka import KafkaConsumer
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -12,19 +11,19 @@ from sqlalchemy import create_engine
 from .settings import settings
 from .models import Order, OrderStatus
 from .kafka_producer import publish_order_created
-
-
-logger = logging.getLogger("order-service")
+from .logger import logger
 
 
 # Synchronous database URL (for consumer)
 SYNC_DATABASE_URL = settings.database_url.replace("postgresql+asyncpg://", "postgresql://")
 
+# Create synchronous engine for Kafka consumer
+sync_engine = create_engine(SYNC_DATABASE_URL)
+
 
 def get_sync_db_session():
-    """Get synchronous database session for Kafka consumer."""
-    engine = create_engine(SYNC_DATABASE_URL)
-    return Session(engine)
+    """Create a synchronous database session for Kafka consumer."""
+    return Session(sync_engine)
 
 
 def handle_payment_completed(event_data: dict):
@@ -159,12 +158,13 @@ def handle_stock_reservation_failed(event_data: dict):
 
 
 def start_payment_event_consumer():
-    """Start the Kafka consumer for payment and stock events."""
+    """Start the Kafka consumer for payment, stock, and product events."""
     logger.info("Starting Order Service Kafka Consumer...")
     
     consumer = KafkaConsumer(
         "payment-events",
         "stock-events",
+        "product-events",  # Added product events
         bootstrap_servers=settings.KAFKA_BOOTSTRAP_SERVERS.split(","),
         group_id=settings.KAFKA_CONSUMER_GROUP_ID,
         value_deserializer=lambda m: json.loads(m.decode('utf-8')),
@@ -172,7 +172,7 @@ def start_payment_event_consumer():
         enable_auto_commit=True
     )
     
-    logger.info("Listening for payment events and stock events...")
+    logger.info("Listening for payment events, stock events, and product events...")
     
     for message in consumer:
         try:
@@ -191,6 +191,28 @@ def start_payment_event_consumer():
                 handle_stock_reserved(event_data)
             elif event_type == "stock_reservation_failed":
                 handle_stock_reservation_failed(event_data)
+            # Product events
+            elif event_type == "product_created":
+                from ..kafka_handlers.product_events import handle_product_created
+                db = get_sync_db_session()
+                try:
+                    handle_product_created(event_data, db)
+                finally:
+                    db.close()
+            elif event_type == "product_updated":
+                from ..kafka_handlers.product_events import handle_product_updated
+                db = get_sync_db_session()
+                try:
+                    handle_product_updated(event_data, db)
+                finally:
+                    db.close()
+            elif event_type == "product_deleted":
+                from ..kafka_handlers.product_events import handle_product_deleted
+                db = get_sync_db_session()
+                try:
+                    handle_product_deleted(event_data, db)
+                finally:
+                    db.close()
             else:
                 logger.warning(f"Unknown event type: {event_type}")
                 

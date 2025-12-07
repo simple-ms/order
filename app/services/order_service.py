@@ -64,13 +64,14 @@ class OrderService:
         correlation_id = str(uuid.uuid4())
         
         try:
-            # Step 1: Create order in database with PENDING status
+            # Step 1: Create order in database with AWAITING_APPROVAL status
+            # Stock will NOT be reserved until seller approves
             new_order = Order(
                 user_id=user_id,
                 product_id=order_data.product_id,
                 quantity=order_data.quantity,
-                total_amount=0.0,  # Will be updated by stock_reserved event
-                status=OrderStatus.PENDING,
+                total_amount=0.0,  # Will be updated after seller approval
+                status=OrderStatus.AWAITING_APPROVAL,  # Wait for seller approval
                 # Add address fields if provided
                 shipping_address=order_data.shipping_address,
                 city=order_data.city,
@@ -78,49 +79,19 @@ class OrderService:
                 country=order_data.country
             )
             order = await self.order_repository.create(new_order)
+            logger.info(f"Order {order.id} created with AWAITING_APPROVAL status")
             
-            logger.info(f"Order created with ID: {order.id}, correlation_id: {correlation_id}")
+            # DO NOT reserve stock yet - wait for seller approval
+            # Seller will approve via /orders/{order_id}/approve endpoint
             
-            # Step 2: Publish stock reservation request to Kafka
-            event_published = publish_stock_reservation_request({
-                "correlation_id": correlation_id,
-                "order_id": order.id,
-                "user_id": user_id,
-                "product_id": order_data.product_id,
-                "quantity": order_data.quantity
-            })
-            
-            if event_published:
-                logger.info(
-                    f"stock_reservation_request published for order {order.id}, "
-                    f"correlation_id: {correlation_id}"
-                )
-            else:
-                logger.warning(
-                    f"Failed to publish stock_reservation_request for order {order.id}. "
-                    "Stock reservation will not be processed."
-                )
-                # Mark order as failed if Kafka publish fails
-                order.status = OrderStatus.FAILED
-                await self.order_repository.update(order)
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="Failed to process order. Please try again."
-                )
-            
-            # Return order immediately (stock reservation happens asynchronously)
-            # The order status will be updated by the Kafka consumer when
-            # stock_reserved or stock_reservation_failed events are received
             return order
             
-        except HTTPException:
-            raise
         except SQLAlchemyError as e:
             await self.order_repository.rollback()
             logger.error(f"Database error while creating order: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Database error occurred"
+                detail="Database error occurred while creating order"
             )
     
     async def get_user_orders(
