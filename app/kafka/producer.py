@@ -1,50 +1,65 @@
 """
-Kafka producer for Order Service.
-Publishes order events and stock reservation requests.
+Async Kafka producer for Order Service.
+Publishes order events and stock reservation requests using aiokafka.
 """
 import json
 from typing import Dict, Any, Optional
-from kafka import KafkaProducer
-from kafka.errors import KafkaError
-from .settings import settings
-from .logger import logger
+from aiokafka import AIOKafkaProducer
+from aiokafka.errors import KafkaError
+from ..settings import settings
+from ..logger import logger
 
 
-class KafkaProducerClient:
-    """Kafka producer client for publishing events."""
+class AsyncKafkaProducerClient:
+    """Async Kafka producer client for publishing events."""
     
     def __init__(self):
-        self.producer: Optional[KafkaProducer] = None
-        self._connect()
+        self.producer: Optional[AIOKafkaProducer] = None
+        self._started = False
     
-    def _connect(self):
-        """Initialize Kafka producer connection."""
+    async def start(self):
+        """Initialize and start Kafka producer connection."""
+        if self._started:
+            return
+        
         try:
-            self.producer = KafkaProducer(
+            self.producer = AIOKafkaProducer(
                 bootstrap_servers=settings.KAFKA_BOOTSTRAP_SERVERS.split(","),
                 value_serializer=lambda v: json.dumps(v).encode('utf-8'),
                 key_serializer=lambda k: k.encode('utf-8') if k else None,
                 acks='all',
-                retries=3,
+                enable_idempotence=True,
                 max_in_flight_requests_per_connection=1
             )
-            logger.info(f"Kafka producer connected to {settings.KAFKA_BOOTSTRAP_SERVERS}")
+            await self.producer.start()
+            self._started = True
+            logger.info(f"Async Kafka producer connected to {settings.KAFKA_BOOTSTRAP_SERVERS}")
         except Exception as e:
-            logger.error(f"Failed to connect Kafka producer: {str(e)}")
+            logger.error(f"Failed to start async Kafka producer: {str(e)}")
             self.producer = None
+            self._started = False
     
-    def send_event(self, topic: str, event_data: Dict[str, Any], key: Optional[str] = None) -> bool:
+    async def stop(self):
+        """Stop Kafka producer connection."""
+        if self.producer and self._started:
+            await self.producer.stop()
+            self._started = False
+            logger.info("Async Kafka producer stopped")
+    
+    async def send_event(self, topic: str, event_data: Dict[str, Any], key: Optional[str] = None) -> bool:
         """Send an event to Kafka topic."""
+        if not self.producer or not self._started:
+            await self.start()
+        
         if not self.producer:
             logger.error("Kafka producer not initialized")
             return False
         
         try:
-            future = self.producer.send(topic, value=event_data, key=key)
-            record_metadata = future.get(timeout=10)
+            metadata = await self.producer.send_and_wait(topic, value=event_data, key=key)
             logger.info(
                 f"Event sent to topic '{topic}': "
-                f"partition={record_metadata.partition}, offset={record_metadata.offset}"
+                f"partition={metadata.partition}, offset={metadata.offset}"
             )
             return True
         except KafkaError as e:
@@ -53,21 +68,15 @@ class KafkaProducerClient:
         except Exception as e:
             logger.error(f"Unexpected error sending event: {str(e)}")
             return False
-    
-    def close(self):
-        """Close Kafka producer connection."""
-        if self.producer:
-            self.producer.close()
-            logger.info("Kafka producer closed")
 
 
 # Global producer instance
-kafka_producer = KafkaProducerClient()
+kafka_producer = AsyncKafkaProducerClient()
 
 
 # --- Stock Reservation Events ---
 
-def publish_stock_reservation_request(reservation_data: Dict[str, Any]) -> bool:
+async def publish_stock_reservation_request(reservation_data: Dict[str, Any]) -> bool:
     """
     Publish stock_reservation_request event to Product Service.
     
@@ -82,14 +91,14 @@ def publish_stock_reservation_request(reservation_data: Dict[str, Any]) -> bool:
         "product_id": reservation_data["product_id"],
         "quantity": reservation_data["quantity"]
     }
-    return kafka_producer.send_event(
+    return await kafka_producer.send_event(
         topic="stock-reservation-requests",
         event_data=event,
         key=reservation_data["correlation_id"]
     )
 
 
-def publish_stock_restoration_request(order_data: Dict[str, Any]) -> bool:
+async def publish_stock_restoration_request(order_data: Dict[str, Any]) -> bool:
     """
     Publish stock_restoration_request event when order is cancelled.
     
@@ -102,7 +111,7 @@ def publish_stock_restoration_request(order_data: Dict[str, Any]) -> bool:
         "product_id": order_data["product_id"],
         "quantity": order_data["quantity"]
     }
-    return kafka_producer.send_event(
+    return await kafka_producer.send_event(
         topic="stock-reservation-requests",
         event_data=event,
         key=str(order_data["order_id"])
@@ -111,7 +120,7 @@ def publish_stock_restoration_request(order_data: Dict[str, Any]) -> bool:
 
 # --- Order Events ---
 
-def publish_order_created(order_data: Dict[str, Any]) -> bool:
+async def publish_order_created(order_data: Dict[str, Any]) -> bool:
     """Publish order_created event."""
     event = {
         "event_type": "order_created",
@@ -122,14 +131,14 @@ def publish_order_created(order_data: Dict[str, Any]) -> bool:
         "total_amount": order_data["total_amount"],
         "status": order_data["status"]
     }
-    return kafka_producer.send_event(
+    return await kafka_producer.send_event(
         topic="order-events",
         event_data=event,
         key=str(order_data["order_id"])
     )
 
 
-def publish_order_status_updated(order_id: str, status: str, user_id: str) -> bool:
+async def publish_order_status_updated(order_id: str, status: str, user_id: str) -> bool:
     """Publish order_status_updated event."""
     event = {
         "event_type": "order_status_updated",
@@ -137,7 +146,7 @@ def publish_order_status_updated(order_id: str, status: str, user_id: str) -> bo
         "user_id": user_id,
         "status": status
     }
-    return kafka_producer.send_event(
+    return await kafka_producer.send_event(
         topic="order-events",
         event_data=event,
         key=order_id

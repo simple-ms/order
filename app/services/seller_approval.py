@@ -11,7 +11,7 @@ from sqlalchemy import select
 from ..models.order import Order, OrderStatus
 from ..models.product_seller_cache import ProductSellerCache
 from ..repository import OrderRepository
-from ..kafka_producer import publish_stock_reservation_request
+from ..kafka.producer import publish_stock_reservation_request
 from ..logger import logger
 
 
@@ -71,11 +71,12 @@ async def approve_order(
         # NOW reserve stock via Kafka
         correlation_id = str(uuid.uuid4())
         logger.info(f"Publishing stock reservation request for approved order {order_id}")
-        publish_stock_reservation_request({
+        await publish_stock_reservation_request({
             "correlation_id": correlation_id,
             "order_id": str(order.id),
             "product_id": order.product_id,
-            "quantity": order.quantity
+            "quantity": order.quantity,
+            "user_id": str(order.user_id)
         })
         
         return order

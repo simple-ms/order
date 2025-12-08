@@ -17,7 +17,7 @@ from ..models.order import Order, OrderStatus
 from ..schemas.order import OrderCreate, OrderResponse, OrderStatusUpdate
 from ..repository import OrderRepository
 from ..logger import logger
-from ..kafka_producer import (
+from ..kafka.producer import (
     publish_stock_reservation_request,
     publish_stock_restoration_request,
     publish_order_created,
@@ -176,7 +176,7 @@ class OrderService:
             logger.info(f"Order {order_id} status updated from {old_status} to {order.status}")
             
             # Publish status update event
-            event_published = publish_order_status_updated(
+            event_published = await publish_order_status_updated(
                 order_id=str(order.id),
                 status=order.status.value,
                 user_id=str(order.user_id)
@@ -230,7 +230,7 @@ class OrderService:
             await self.order_repository.update(order)
             
             # Publish stock restoration request to Kafka (asynchronous)
-            event_published = publish_stock_restoration_request({
+            event_published = await publish_stock_restoration_request({
                 "order_id": order.id,
                 "product_id": order.product_id,
                 "quantity": order.quantity
