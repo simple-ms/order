@@ -142,35 +142,33 @@ async def handle_stock_reservation_failed(event_data: dict):
 
 async def handle_product_created(event_data: dict):
     """Handle product_created event from Product Service."""
-    from ..kafka_handlers.product_events import handle_product_created as sync_handler
+    from ..kafka_handlers.product_events import handle_product_created as async_handler
     
     async with AsyncSessionLocal() as db:
         try:
-            # Convert async session to sync for the handler
-            # Note: This is a temporary bridge - ideally product_events should be async too
-            await db.run_sync(lambda session: sync_handler(event_data, session))
+            await async_handler(event_data, db)
         except Exception as e:
             logger.error(f"Error handling product_created: {str(e)}")
 
 
 async def handle_product_updated(event_data: dict):
     """Handle product_updated event from Product Service."""
-    from ..kafka_handlers.product_events import handle_product_updated as sync_handler
+    from ..kafka_handlers.product_events import handle_product_updated as async_handler
     
     async with AsyncSessionLocal() as db:
         try:
-            await db.run_sync(lambda session: sync_handler(event_data, session))
+            await async_handler(event_data, db)
         except Exception as e:
             logger.error(f"Error handling product_updated: {str(e)}")
 
 
 async def handle_product_deleted(event_data: dict):
     """Handle product_deleted event from Product Service."""
-    from ..kafka_handlers.product_events import handle_product_deleted as sync_handler
+    from ..kafka_handlers.product_events import handle_product_deleted as async_handler
     
     async with AsyncSessionLocal() as db:
         try:
-            await db.run_sync(lambda session: sync_handler(event_data, session))
+            await async_handler(event_data, db)
         except Exception as e:
             logger.error(f"Error handling product_deleted: {str(e)}")
 

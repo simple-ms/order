@@ -1,16 +1,16 @@
 """
-Kafka event handlers for product events.
+Async Kafka event handlers for product events.
 Handles product_created, product_updated, product_deleted events.
 """
 from sqlalchemy import select, delete
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from ..models import ProductSellerCache
 from ..cache import redis_client
 from ..logger import logger
 
 
-def handle_product_created(event_data: dict, db: Session):
+async def handle_product_created(event_data: dict, db: AsyncSession):
     """
     Handle product_created event from Product Service.
     Updates both PostgreSQL cache and Redis.
@@ -21,7 +21,7 @@ def handle_product_created(event_data: dict, db: Session):
     price = event_data.get("price")
     stock = event_data.get("stock")
     
-    logger.info(f"Processing product_created event: product_id={product_id}")
+    logger.info(f"Processing product_created event: product_id={product_id}, seller_id={seller_id}")
     
     try:
         # Upsert into PostgreSQL cache
@@ -37,37 +37,37 @@ def handle_product_created(event_data: dict, db: Session):
                 'product_name': name
             }
         )
-        db.execute(stmt)
-        db.commit()
+        await db.execute(stmt)
+        await db.commit()
         
         # Cache in Redis with full product data
         product_data = {
             'id': product_id,
-            'seller_id': seller_id,
+            'seller_id': str(seller_id),
             'name': name,
             'price': price,
             'stock': stock
         }
         redis_client.set_product(product_id, product_data)
         
-        logger.info(f"Product {product_id} cached successfully (PostgreSQL + Redis)")
+        logger.info(f"Product {product_id} cached successfully for seller {seller_id} (PostgreSQL + Redis)")
         
     except Exception as e:
-        db.rollback()
+        await db.rollback()
         logger.error(f"Error caching product {product_id}: {str(e)}")
         raise
 
 
-def handle_product_updated(event_data: dict, db: Session):
+async def handle_product_updated(event_data: dict, db: AsyncSession):
     """
     Handle product_updated event from Product Service.
     Updates both PostgreSQL cache and Redis.
     """
     # Same logic as product_created (upsert)
-    handle_product_created(event_data, db)
+    await handle_product_created(event_data, db)
 
 
-def handle_product_deleted(event_data: dict, db: Session):
+async def handle_product_deleted(event_data: dict, db: AsyncSession):
     """
     Handle product_deleted event from Product Service.
     Removes from both PostgreSQL cache and Redis.
@@ -78,12 +78,12 @@ def handle_product_deleted(event_data: dict, db: Session):
     
     try:
         # Remove from PostgreSQL
-        db.execute(
+        await db.execute(
             delete(ProductSellerCache).where(
                 ProductSellerCache.product_id == product_id
             )
         )
-        db.commit()
+        await db.commit()
         
         # Remove from Redis
         redis_client.delete_product(product_id)
@@ -91,6 +91,6 @@ def handle_product_deleted(event_data: dict, db: Session):
         logger.info(f"Product {product_id} removed from cache (PostgreSQL + Redis)")
         
     except Exception as e:
-        db.rollback()
+        await db.rollback()
         logger.error(f"Error removing product {product_id} from cache: {str(e)}")
         raise
