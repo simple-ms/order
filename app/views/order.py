@@ -4,7 +4,8 @@ from fastapi import APIRouter, Depends, status, HTTPException
 
 from ..schemas.order import OrderCreate, OrderResponse, OrderStatusUpdate
 from ..services import OrderService
-from ..dependencies import get_order_service, get_current_user_id, get_current_user_role
+from ..repository import OrderRepository
+from ..dependencies import get_order_service, get_order_repository, get_current_user_id, get_current_user_role
 
 router = APIRouter(tags=["Orders"])
 
@@ -64,7 +65,7 @@ async def get_seller_orders_endpoint(
     limit: int = 100,
     user_id: UUID = Depends(get_current_user_id),
     user_role: str = Depends(get_current_user_role),
-    order_service: OrderService = Depends(get_order_service)
+    order_repository: OrderRepository = Depends(get_order_repository)
 ):
     """
     Get all orders for products owned by the seller.
@@ -78,14 +79,7 @@ async def get_seller_orders_endpoint(
         )
     
     from ..services.seller_orders import get_seller_orders
-    from ..dependencies import get_order_repository
-    
-    # Get repository instance
-    from ..database import get_db
-    async for db in get_db():
-        from ..repository import OrderRepository
-        repo = OrderRepository(db)
-        return await get_seller_orders(user_id, repo, skip, limit)
+    return await get_seller_orders(user_id, order_repository, skip, limit)
 
 
 @router.get(
@@ -129,7 +123,7 @@ async def approve_order(
     order_id: UUID,
     user_id: UUID = Depends(get_current_user_id),
     user_role: str = Depends(get_current_user_role),
-    order_service: OrderService = Depends(get_order_service)
+    order_repository: OrderRepository = Depends(get_order_repository)
 ):
     """
     Approve an order (seller only).
@@ -138,7 +132,6 @@ async def approve_order(
     Only the seller who owns the product can approve the order.
     """
     from ..services.seller_approval import approve_order as approve_order_service
-    from ..dependencies import get_order_repository
     
     if user_role != "seller":
         raise HTTPException(
@@ -146,7 +139,6 @@ async def approve_order(
             detail="Only sellers can approve orders"
         )
     
-    order_repository = await anext(get_order_repository())
     return await approve_order_service(order_id, user_id, order_repository)
 
 
@@ -158,7 +150,7 @@ async def reject_order(
     order_id: UUID,
     user_id: UUID = Depends(get_current_user_id),
     user_role: str = Depends(get_current_user_role),
-    order_service: OrderService = Depends(get_order_service)
+    order_repository: OrderRepository = Depends(get_order_repository)
 ):
     """
     Reject an order (seller only).
@@ -167,7 +159,6 @@ async def reject_order(
     Only the seller who owns the product can reject the order.
     """
     from ..services.seller_approval import reject_order as reject_order_service
-    from ..dependencies import get_order_repository
     
     if user_role != "seller":
         raise HTTPException(
@@ -175,7 +166,6 @@ async def reject_order(
             detail="Only sellers can reject orders"
         )
     
-    order_repository = await anext(get_order_repository())
     return await reject_order_service(order_id, user_id, order_repository)
 
 
